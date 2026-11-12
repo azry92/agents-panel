@@ -30,6 +30,21 @@ In the Claude desktop app, where `/plugin` doesn't run: click **+** next to the 
 
 Costs are estimates, so treat them as a guide, not a bill.
 
+### Your plan usage
+
+**On a Pro or Max plan, the panel shows how much of your usage limits you've used**, at the top, even before any agent runs:
+
+```
+Your plan
+5-hour   ██████████░░░░  62%  resets in 1h 40m
+Weekly   ███░░░░░░░░░░░  18%  resets in 6d 6h
+```
+
+- **The bars turn yellow at 75% and red at 90%.** When a window passes 75% and again at 90%, you get a short pop-up, even if the panel is closed. Each warning shows once per window, however many sessions you have open, and comes back after the window resets.
+- **Figures update with each of Claude's replies.** After a long break, a window whose reset time has passed shows "reset, updates after your next message" until the next reply.
+- **On a plan, costs are labelled "Value":** what the work would cost at list prices. You aren't billed per token, but it still shows which agents did the heavy work.
+- **Billed per token (API)?** There are no plan bars, and costs are labelled "Cost", as before. If your gateway has a spend limit, it shows as a "Spend limit" bar, and a figure over 100% means you're past it.
+
 ### The chameleons
 
 **Colour shows how full each agent's context is while it works.** Green means plenty of room, then yellow (about 45%), orange (about 65%) and red from 85%. The chameleon also gets slightly darker as it fills, and the exact figure is always next to it, for example "62% of 200k".

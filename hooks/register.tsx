@@ -1,10 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelUsage, Register } from 'claude-code'
 
-import type { AgentRun, AgentStatus, Fx } from '../types'
+import type { AgentRun, AgentStatus, Fx, PlanWindow } from '../types'
 import { AVATAR_H, AVATAR_W, avatarSvg } from './avatar'
 import { currencyCode, formatMoney, manualRate, resolveFx, savedRate, USD } from './money'
 import { costOf, modelInfo, parsePriceOverrides } from './models'
+import { barFill, isSubscriber, levelOf, percentText, pruneWarned, resetsIn, warningsDue, windowLabel } from './plan'
+import type { Level } from './plan'
 
 const PANE = 'agents-panel'
 const TITLE = 'Agents'
@@ -20,8 +22,10 @@ const band = atom({ plugin: 'agents-panel', key: 'band' } as const, 'none')
 const fx = atom({ plugin: 'agents-panel', key: 'fx' } as const, USD)
 const fxProblem = atom({ plugin: 'agents-panel', key: 'fxProblem' } as const, '')
 const sessionUsd = atom({ plugin: 'agents-panel', key: 'sessionUsd' } as const, -1)
+const plan = atom({ plugin: 'agents-panel', key: 'plan' } as const, [] as PlanWindow[])
 
 const RATE_KEY = 'rate' // $.store: the last exchange rate fetched, so it's fetched at most once a day
+const WARNED_KEY = 'warned' // $.store: plan warnings already shown, shared by every session
 
 /** A line in the debug log (claude --debug). Never throws: logging must not break the panel. */
 const debug = ($: EngineInterface, text: string) =>
@@ -41,6 +45,22 @@ const openPanel = async ($: EngineInterface): Promise<boolean> => {
 
 /** The panel's row in the open panes, if it's open at all (drawn or waiting). */
 const panelPane = async ($: EngineInterface) => (await $.ui.panes()).find(p => p.id === PANE)
+
+/**
+ * Takes a reading of the plan's usage windows: keeps it for the panel, and pops
+ * up any 75% / 90% warning not yet shown for that window, in any session.
+ * The pop-ups don't need the panel open: they're about the plan, not the panel.
+ */
+const takePlanReading = async ($: EngineInterface, windows: readonly PlanWindow[]) => {
+  const reading = windows.map(w => ({ kind: w.kind, percentUsed: w.percentUsed, resetsAt: w.resetsAt }))
+  await update($, plan, () => reading)
+  const stored = await $.store.get(WARNED_KEY)
+  const warned = Array.isArray(stored) ? stored.filter((k): k is string => typeof k === 'string') : []
+  const due = warningsDue(reading, warned, await $.clock.now())
+  if (!due.length) return
+  for (const w of due) if (w.text) $.ui.toast(w.text, { timeoutMs: 8000 })
+  await $.store.set(WARNED_KEY, [...pruneWarned(warned, reading), ...due.map(w => w.key)])
+}
 
 /** Picks the currency's rate for this session: fetched at most once a day, else a fallback. */
 const refreshFx = async ($: EngineInterface, currency: string | undefined, fallbackRate: number | undefined) => {
@@ -115,10 +135,14 @@ const BAR_H = 6
 const ACCENT = '#D97757'
 const NEUTRAL = '#8E8E93'
 
-const gaugeSvg = (fill: number, status: AgentStatus) => {
+const gaugeSvg = (fill: number, status: AgentStatus) => barSvg(fill, status === 'running' ? ACCENT : NEUTRAL)
+
+// Plan bars: green with room, yellow from 75%, red from 90%, grey when out of date.
+const LEVEL_COLOR: Record<Level, string> = { ok: '#5FA866', warn: '#E2B33C', high: '#D9534F', stale: NEUTRAL }
+
+const barSvg = (fill: number, color: string) => {
   const f = Math.min(1, Math.max(0, fill))
   const w = f > 0 ? Math.max(BAR_H, Math.round(f * BAR_W)) : 0
-  const color = status === 'running' ? ACCENT : NEUTRAL
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${BAR_W}" height="${BAR_H}" viewBox="0 0 ${BAR_W} ${BAR_H}">
 <rect width="${BAR_W}" height="${BAR_H}" rx="${BAR_H / 2}" fill="${NEUTRAL}" fill-opacity=".22"/>
 ${w ? `<rect width="${w}" height="${BAR_H}" rx="${BAR_H / 2}" fill="${color}"/>` : ''}
@@ -188,10 +212,16 @@ export const register: Register = (on, options) => {
     }
     // Neither may hold up the session or break it: each runs on its own and logs its failure.
     void refreshFx($, currency, fallbackRate).catch(err => debug($, `exchange rate: ${err instanceof Error ? err.message : String(err)}`))
-    void (async () => {
-      const cost = (await $.session.usage()).cost
+    // Usage is answered locally and quickly, so it's read before the session goes on;
+    // a failure is logged and never stops the session.
+    try {
+      const usage = await $.session.usage()
+      const cost = usage.cost
       if (cost) await update($, sessionUsd, () => cost.usd)
-    })().catch(err => debug($, `session cost: ${err instanceof Error ? err.message : String(err)}`))
+      if (usage.rateLimits?.length) await takePlanReading($, usage.rateLimits)
+    } catch (err) {
+      void debug($, `session usage: ${err instanceof Error ? err.message : String(err)}`)
+    }
 
     // Keeps elapsed times moving while anything runs; idle sessions don't redraw.
     void $.clock.every(1000, () => {
@@ -211,6 +241,14 @@ export const register: Register = (on, options) => {
   on('session.measure', async ($, e, next) => {
     const cost = e.cost
     if (cost) await update($, sessionUsd, () => cost.usd)
+    // Plan usage arrives with each reply; a failure here must not break the reading's other hooks.
+    if (e.changed.includes('rateLimits')) {
+      try {
+        await takePlanReading($, e.rateLimits)
+      } catch (err) {
+        void debug($, `plan usage: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     return next(e)
   })
 
@@ -424,6 +462,49 @@ export const register: Register = (on, options) => {
     const totalTokens = list.reduce((s, a) => s + a.tokens, 0)
     const totalTime = list.reduce((s, a) => s + elapsed(a, at), 0)
 
+    // Plan usage: only subscribers (and gateways with a spend limit) have windows.
+    const windows = await read($, plan)
+    const clock = await $.clock.now()
+    const subscriber = isSubscriber(windows)
+    const planRow = (w: PlanWindow) => {
+      const level = levelOf(w, clock)
+      const when = resetsIn(w.resetsAt, clock)
+      const detail =
+        level === 'stale' ? 'reset, updates after your next message' : `${percentText(w)}${when ? `  resets in ${when}` : ''}`
+      return (
+        <Box key={`p-${w.kind}`} flexDirection="row" gap={1} alignItems="center">
+          <Text size="footnote" dimColor={level === 'stale'}>
+            {windowLabel(w.kind)}
+          </Text>
+          {'Svg' in ui ? (
+            <ui.Svg
+              key={`pb-${w.kind}`}
+              source={barSvg(barFill(w), LEVEL_COLOR[level])}
+              alt={`${windowLabel(w.kind)} plan usage ${percentText(w)}`}
+              width={BAR_W}
+              height={BAR_H}
+            />
+          ) : (
+            <Text mono dimColor={level === 'stale'}>
+              {textBar(barFill(w))}
+            </Text>
+          )}
+          <Text size="caption" mono dimColor>
+            {detail}
+          </Text>
+        </Box>
+      )
+    }
+    const planBlock =
+      windows.length > 0 ? (
+        <Box key="plan" flexDirection="column">
+          <Text weight="semibold" size="footnote">
+            Your plan
+          </Text>
+          {windows.map(planRow)}
+        </Box>
+      ) : null
+
     // Usage by model, most expensive first: where the money went.
     const byModel = [
       ...list
@@ -533,6 +614,7 @@ export const register: Register = (on, options) => {
     if (list.length === 0) {
       return (
         <Box flexDirection="column" gap={1}>
+          {planBlock}
           <Text weight="semibold">No subagents yet</Text>
           <Text dimColor>Each subagent this session starts shows up here with its model, context, cost and time.</Text>
           <Text dimColor>Want your own? Run /agents in Claude Code to create one, such as a reviewer or a researcher.</Text>
@@ -542,8 +624,9 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column" gap={1}>
+        {planBlock}
         <Box flexDirection="row" gap={1}>
-          {tile('Cost', spend(totalCost, anyUnpriced))}
+          {tile(subscriber ? 'Value' : 'Cost', spend(totalCost, anyUnpriced))}
           {tile('Tokens', fmtTokens(totalTokens))}
           {tile('Agent time', fmtTime(totalTime))}
         </Box>
@@ -561,6 +644,11 @@ export const register: Register = (on, options) => {
           ))}
         </Box>
 
+        {subscriber && (
+          <Text dimColor size="footnote">
+            List-price value. You're on a plan, so this isn't billed per token.
+          </Text>
+        )}
         {session >= 0 && (
           <Text dimColor size="footnote">
             Whole session, from Claude Code: {formatMoney(session, money)}. It includes the main conversation and stays

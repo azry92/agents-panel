@@ -1,8 +1,8 @@
 {
   "name": "agents-panel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MIT",
-  "description": "Sidebar listing each subagent with model, context fill, estimated cost and time, drawn as pixel chameleons that change colour as their context fills and grow as they use tokens",
+  "description": "Sidebar showing your plan's 5-hour and weekly usage, and each subagent's model, context fill, estimated cost and time, drawn as pixel chameleons that change colour as their context fills and grow as they use tokens",
   "types": "./types/index.d.ts",
   "userConfig": {
     "launch": {
