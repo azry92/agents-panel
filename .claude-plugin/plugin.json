@@ -1,0 +1,34 @@
+{
+  "name": "agents-panel",
+  "version": "0.2.0",
+  "license": "MIT",
+  "description": "Sidebar listing each subagent with model, context fill, estimated cost and time, drawn as pixel chameleons that change colour as their context fills and grow as they use tokens",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "launch": {
+      "type": "string",
+      "title": "Open the Agents panel",
+      "description": "auto: use what you picked in the first-run question or with /agents-panel (when a subagent starts, if nothing yet). always: at the start of every session. subagent: when the first subagent starts. ask: ask every session. off: only with /agents-panel",
+      "default": "auto",
+      "options": ["auto", "always", "subagent", "ask", "off"]
+    },
+    "prices": {
+      "type": "string",
+      "title": "Custom model prices",
+      "description": "model=input/output in US$ per million tokens, comma-separated, with an optional @size for the context window. Example: gpt-5=1.25/10, gemini-2.5-pro=1.25/10@1m, opus=3/15. For models the panel can't price (such as GPT or Gemini through a gateway), or to replace a Claude list price with your own rate.",
+      "default": ""
+    },
+    "currency": {
+      "type": "string",
+      "title": "Currency",
+      "description": "Three-letter code to show costs in, such as MYR, SGD, EUR or JPY. The rate is fetched once a day from the European Central Bank's reference rates (frankfurter.dev); only the currency code is sent. USD makes no request.",
+      "default": "USD"
+    },
+    "exchangeRate": {
+      "type": "string",
+      "title": "Fallback exchange rate",
+      "description": "Units of your currency per 1 US dollar, such as 4.07 for MYR. Used only when the daily rate can't be fetched, or for a currency the ECB doesn't publish. Leave empty to fall back to US dollars.",
+      "default": ""
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "agents-panel",
+  "description": "A Claude Code sidebar showing each subagent's model, context, estimated cost in your currency, and time.",
+  "owner": { "name": "azry92" },
+  "plugins": [{ "name": "agents-panel", "source": "./" }]
+}
